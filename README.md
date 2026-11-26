@@ -15,7 +15,7 @@ All accounts use the same password: `Stokvel2026!`
 | Chair | `chair.demo` | Summary dashboard, audit log |
 | Treasurer | `treasurer.demo` | Confirm or reject Pule's claim, overdue list + WhatsApp reminder, reverse a confirmed payment |
 | Member | `member.demo` | Tap "I've paid" on the current month, then sign in as the treasurer to confirm it |
-| Member | `sipho.demo` | Has two overdue months |
+| Member | `sipho.demo` | Has overdue months (two earlier months, plus the current month once its due day has passed) |
 | Member | `ayanda.demo` | Has a rejected payment with a reason |
 | Member | `pule.demo` | Has a payment awaiting confirmation |
 

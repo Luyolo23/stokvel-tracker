@@ -4,6 +4,7 @@ import com.stokveltracker.domain.*;
 import com.stokveltracker.repo.ContributionRepository;
 import com.stokveltracker.repo.GroupRepository;
 import com.stokveltracker.repo.UserRepository;
+import com.stokveltracker.service.AuditService;
 import com.stokveltracker.service.ContributionService;
 import com.stokveltracker.service.Dates;
 import java.time.Instant;
@@ -25,16 +26,18 @@ public class DataSeeder implements CommandLineRunner {
     private final UserRepository users;
     private final ContributionRepository contributions;
     private final ContributionService service;
+    private final AuditService audit;
     private final PasswordEncoder encoder;
     private final String password;
 
     public DataSeeder(GroupRepository groups, UserRepository users, ContributionRepository contributions,
-                      ContributionService service, PasswordEncoder encoder,
+                      ContributionService service, AuditService audit, PasswordEncoder encoder,
                       @Value("${app.seed.password}") String password) {
         this.groups = groups;
         this.users = users;
         this.contributions = contributions;
         this.service = service;
+        this.audit = audit;
         this.encoder = encoder;
         this.password = password;
     }
@@ -66,29 +69,44 @@ public class DataSeeder implements CommandLineRunner {
         Instant at = Instant.now();
         for (Contribution c : contributions.findAll()) {
             String who = c.getUser().getUsername();
+            String name = c.getUser().getDisplayName();
             YearMonth p = YearMonth.parse(c.getPeriod());
+            // A treasurer cannot decide on their own payment, so the chair confirms it.
+            String decider = who.equals("treasurer.demo") ? "chair.demo" : "treasurer.demo";
+
             if (p.isBefore(now)) {
                 boolean sipho = who.equals("sipho.demo")
                         && (p.equals(now.minusMonths(1)) || p.equals(now.minusMonths(2)));
                 if (sipho) {
-                    continue; // left DUE: overdue for two months
+                    continue; // left DUE: overdue
                 }
                 if (who.equals("ayanda.demo") && p.equals(now.minusMonths(1))) {
-                    c.reject("treasurer.demo", "Reference does not match the bank deposit", at);
-                } else {
+                    String reason = "Reference does not match the bank deposit";
                     c.claim("EFT-" + p, at);
-                    c.confirm("treasurer.demo", at);
+                    c.reject(decider, reason, at);
+                    audit.record(decider, "REJECT", name + " " + p + " rejected: " + reason);
+                } else {
+                    paid(c, decider, at);
                 }
             } else {
                 switch (who) {
                     case "member.demo", "sipho.demo" -> { /* current month stays DUE */ }
-                    case "pule.demo" -> c.claim("PULE-" + p, at); // waiting for the treasurer
-                    default -> {
-                        c.claim("EFT-" + p, at);
-                        c.confirm("treasurer.demo", at);
+                    case "pule.demo" -> {
+                        c.claim("PULE-" + p, at); // waiting for the treasurer
+                        audit.record(who, "CLAIM", p + " claimed as paid, ref: PULE-" + p);
                     }
+                    default -> paid(c, decider, at);
                 }
             }
         }
+    }
+
+    /** Seeds a month as claimed by the member and confirmed by someone allowed to decide. */
+    private void paid(Contribution c, String decider, Instant at) {
+        String ref = "EFT-" + c.getPeriod();
+        c.claim(ref, at);
+        c.confirm(decider, at);
+        audit.record(decider, "CONFIRM",
+                c.getUser().getDisplayName() + " " + c.getPeriod() + " confirmed, ref: " + ref);
     }
 }
