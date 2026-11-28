@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, HttpError, logout, setUnauthorizedHandler } from './api'
+import { api, chairClaims, HttpError, logout, setUnauthorizedHandler } from './api'
 import type { Me } from './types'
 import Login from './components/Login'
 import Tabs from './components/Tabs'
@@ -26,8 +26,13 @@ export default function App() {
   }, [])
 
   async function handleLogout() {
-    await logout()
-    setMe(null)
+    try {
+      await logout()
+    } catch {
+      // Even if the request fails, clear the local session view.
+    } finally {
+      setMe(null)
+    }
   }
 
   if (loading) return <p className="center muted">Loading…</p>
@@ -37,6 +42,16 @@ export default function App() {
     me.role === 'CHAIR'
       ? [
           { key: 'summary', label: 'Summary', content: <ChairView part="summary" /> },
+          {
+            key: 'treasurer-pending',
+            label: 'Treasurer to confirm',
+            content: <TreasurerView part="pending" apiSet={chairClaims} />,
+          },
+          {
+            key: 'treasurer-confirmed',
+            label: 'Treasurer confirmed',
+            content: <TreasurerView part="confirmed" apiSet={chairClaims} />,
+          },
           { key: 'audit', label: 'Audit log', content: <ChairView part="audit" /> },
           { key: 'mine', label: 'My payments', content: <MemberView /> },
         ]

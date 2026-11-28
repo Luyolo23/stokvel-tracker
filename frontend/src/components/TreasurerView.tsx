@@ -1,25 +1,69 @@
-import { useState } from 'react'
-import { api } from '../api'
+import { useCallback, useEffect, useState } from 'react'
+import { api, type ClaimApi } from '../api'
 import { dateTime, monthLabel, rand } from '../format'
 import type { Claim, OverdueMember } from '../types'
 import { useLoader } from './useLoader'
 
 type Part = 'pending' | 'overdue' | 'confirmed'
 
-export default function TreasurerView({ part }: { part: Part }) {
+export default function TreasurerView({ part, apiSet = api }: { part: Part; apiSet?: ClaimApi }) {
   if (part === 'overdue') return <Overdue />
-  return <ClaimList mode={part} />
+  return <ClaimList mode={part} apiSet={apiSet} />
 }
 
-/** Pending claims (confirm / reject) or recently confirmed (reverse a mistake). */
-function ClaimList({ mode }: { mode: 'pending' | 'confirmed' }) {
-  const { data, error, loading, reload } = useLoader<Claim[]>(
-    mode === 'pending' ? api.pending : api.confirmed,
-  )
+/** Pending claims (confirm / reject) or confirmed payments (reverse a mistake). */
+function ClaimList({ mode, apiSet }: { mode: 'pending' | 'confirmed'; apiSet: ClaimApi }) {
+  const [items, setItems] = useState<Claim[] | null>(null)
+  const [hasMore, setHasMore] = useState(false)
+  const [page, setPage] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [error, setError] = useState('')
   const [actionId, setActionId] = useState<number | null>(null)
   const [reason, setReason] = useState('')
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
+
+  const loadFirstPage = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      if (mode === 'pending') {
+        setItems(await apiSet.pending())
+        setHasMore(false)
+        setPage(0)
+      } else {
+        const result = await apiSet.confirmed(0)
+        setItems(result.items)
+        setHasMore(result.hasMore)
+        setPage(0)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load data')
+    } finally {
+      setLoading(false)
+    }
+  }, [apiSet, mode])
+
+  useEffect(() => {
+    loadFirstPage()
+  }, [loadFirstPage])
+
+  async function loadMore() {
+    setLoadingMore(true)
+    setMessage('')
+    try {
+      const next = page + 1
+      const result = await apiSet.confirmed(next)
+      setItems((current) => [...(current ?? []), ...result.items])
+      setHasMore(result.hasMore)
+      setPage(next)
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Could not load more')
+    } finally {
+      setLoadingMore(false)
+    }
+  }
 
   async function run(fn: () => Promise<void>) {
     setBusy(true)
@@ -28,7 +72,7 @@ function ClaimList({ mode }: { mode: 'pending' | 'confirmed' }) {
       await fn()
       setActionId(null)
       setReason('')
-      await reload()
+      await loadFirstPage()
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Action failed')
     } finally {
@@ -36,9 +80,15 @@ function ClaimList({ mode }: { mode: 'pending' | 'confirmed' }) {
     }
   }
 
+  function openAction(id: number) {
+    setActionId(id)
+    setReason('')
+    setMessage('')
+  }
+
   if (loading) return <p className="muted">Loading…</p>
-  if (error || !data) return <p className="error">{error || 'No data'}</p>
-  if (data.length === 0) {
+  if (error || !items) return <p className="error">{error || 'No data'}</p>
+  if (items.length === 0 && !hasMore) {
     return (
       <p className="muted center">
         {mode === 'pending' ? 'Nothing waiting for you. All caught up.' : 'No confirmed payments yet.'}
@@ -50,7 +100,7 @@ function ClaimList({ mode }: { mode: 'pending' | 'confirmed' }) {
     <>
       {message && <p className="error" role="alert">{message}</p>}
       <ul className="list">
-        {data.map((c) => (
+        {items.map((c) => (
           <li key={c.id} className="card">
             <div className="row">
               <div>
@@ -65,16 +115,16 @@ function ClaimList({ mode }: { mode: 'pending' | 'confirmed' }) {
 
             {actionId !== c.id && mode === 'pending' && (
               <div className="row gap">
-                <button className="btn primary" disabled={busy} onClick={() => run(() => api.confirm(c.id))}>
+                <button className="btn primary" disabled={busy} onClick={() => run(() => apiSet.confirm(c.id))}>
                   Confirm
                 </button>
-                <button className="btn danger" disabled={busy} onClick={() => { setActionId(c.id); setMessage('') }}>
+                <button className="btn danger" disabled={busy} onClick={() => openAction(c.id)}>
                   Reject
                 </button>
               </div>
             )}
             {actionId !== c.id && mode === 'confirmed' && (
-              <button className="btn ghost" onClick={() => { setActionId(c.id); setMessage('') }}>
+              <button className="btn ghost" onClick={() => openAction(c.id)}>
                 Reverse (correct a mistake)
               </button>
             )}
@@ -84,7 +134,7 @@ function ClaimList({ mode }: { mode: 'pending' | 'confirmed' }) {
                 className="inline-form"
                 onSubmit={(e) => {
                   e.preventDefault()
-                  run(() => (mode === 'pending' ? api.reject(c.id, reason) : api.reverse(c.id, reason)))
+                  run(() => (mode === 'pending' ? apiSet.reject(c.id, reason) : apiSet.reverse(c.id, reason)))
                 }}
               >
                 <label>
@@ -102,6 +152,11 @@ function ClaimList({ mode }: { mode: 'pending' | 'confirmed' }) {
           </li>
         ))}
       </ul>
+      {mode === 'confirmed' && hasMore && (
+        <button className="btn ghost" disabled={loadingMore} onClick={loadMore}>
+          {loadingMore ? 'Loading…' : 'Load more'}
+        </button>
+      )}
     </>
   )
 }

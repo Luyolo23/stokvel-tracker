@@ -8,6 +8,11 @@ const LABELS: Record<Contribution['status'], string> = {
 }
 
 export default function StatusBadge({ c }: { c: Pick<Contribution, 'status' | 'overdue'> }) {
-  const cls = c.overdue ? 'badge overdue' : `badge ${c.status.toLowerCase()}`
-  return <span className={cls}>{c.overdue ? 'Overdue' : LABELS[c.status]}</span>
+  const rejected = c.status === 'REJECTED'
+  const cls = rejected
+    ? 'badge rejected'
+    : c.overdue
+      ? 'badge overdue'
+      : `badge ${c.status.toLowerCase()}`
+  return <span className={cls}>{rejected ? 'Rejected' : c.overdue ? 'Overdue' : LABELS[c.status]}</span>
 }

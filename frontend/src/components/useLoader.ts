@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 /** Small data-loading hook: runs `fn`, tracks loading/error, and exposes reload(). */
 export function useLoader<T>(fn: () => Promise<T>) {
@@ -6,16 +6,21 @@ export function useLoader<T>(fn: () => Promise<T>) {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
 
+  // Keep the latest fn without making reload() change identity on every render.
+  const fnRef = useRef(fn)
+  useEffect(() => {
+    fnRef.current = fn
+  }, [fn])
+
   const reload = useCallback(async () => {
     setError('')
     try {
-      setData(await fn())
+      setData(await fnRef.current())
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load data')
     } finally {
       setLoading(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {

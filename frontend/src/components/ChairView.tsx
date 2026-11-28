@@ -33,7 +33,7 @@ function Summary() {
           </thead>
           <tbody>
             {data.members.map((m) => (
-              <tr key={m.memberName}>
+              <tr key={m.userId}>
                 <td>{m.memberName}</td>
                 <td>{rand(m.confirmedCents)}</td>
                 <td>{rand(m.owedCents)}</td>

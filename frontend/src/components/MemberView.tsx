@@ -9,11 +9,13 @@ export default function MemberView() {
   const [claimingId, setClaimingId] = useState<number | null>(null)
   const [reference, setReference] = useState('')
   const [formError, setFormError] = useState('')
+  const [actionError, setActionError] = useState('')
   const [busy, setBusy] = useState(false)
 
   async function submitClaim(id: number) {
     setBusy(true)
     setFormError('')
+    setActionError('')
     try {
       await api.claim(id, reference)
       setClaimingId(null)
@@ -21,6 +23,19 @@ export default function MemberView() {
       await reload()
     } catch (e) {
       setFormError(e instanceof Error ? e.message : 'Could not send')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function withdrawClaim(id: number) {
+    setBusy(true)
+    setActionError('')
+    try {
+      await api.withdraw(id)
+      await reload()
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Could not withdraw the claim')
     } finally {
       setBusy(false)
     }
@@ -37,6 +52,7 @@ export default function MemberView() {
         <div className="stat"><span className="muted small">Still owed</span><strong>{rand(data.owedCents)}</strong></div>
       </div>
 
+      {actionError && <p className="error" role="alert">{actionError}</p>}
       <ul className="list">
         {data.contributions.map((c) => {
           const canClaim = c.status === 'DUE' || c.status === 'REJECTED'
@@ -56,6 +72,11 @@ export default function MemberView() {
               )}
               {c.reference && c.status !== 'DUE' && (
                 <p className="muted small">Reference: {c.reference}</p>
+              )}
+              {c.status === 'PENDING' && (
+                <button className="btn ghost" disabled={busy} onClick={() => withdrawClaim(c.id)}>
+                  Withdraw claim
+                </button>
               )}
               {canClaim && claimingId !== c.id && (
                 <button className="btn primary" onClick={() => { setClaimingId(c.id); setFormError('') }}>

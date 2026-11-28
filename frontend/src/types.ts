@@ -38,6 +38,11 @@ export interface Claim {
   decidedAt: string | null
 }
 
+export interface ConfirmedPage {
+  items: Claim[]
+  hasMore: boolean
+}
+
 export interface OverdueMember {
   userId: number
   memberName: string
@@ -47,6 +52,7 @@ export interface OverdueMember {
 }
 
 export interface MemberRow {
+  userId: number
   memberName: string
   confirmedCents: number
   owedCents: number
