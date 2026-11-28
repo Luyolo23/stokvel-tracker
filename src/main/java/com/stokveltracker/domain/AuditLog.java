@@ -10,6 +10,14 @@ public class AuditLog {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    /**
+     * Nullable only so rows created before audit entries were group-scoped remain readable.
+     * New entries always carry the group.
+     */
+    @ManyToOne
+    @JoinColumn(name = "group_id")
+    private StokvelGroup group;
+
     @Column(nullable = false, length = 50)
     private String actor;
 
@@ -24,7 +32,8 @@ public class AuditLog {
 
     protected AuditLog() {}
 
-    public AuditLog(String actor, String action, String detail) {
+    public AuditLog(StokvelGroup group, String actor, String action, String detail) {
+        this.group = group;
         this.actor = actor;
         this.action = action;
         this.detail = detail.length() > 500 ? detail.substring(0, 500) : detail;
@@ -32,6 +41,7 @@ public class AuditLog {
     }
 
     public Long getId() { return id; }
+    public StokvelGroup getGroup() { return group; }
     public String getActor() { return actor; }
     public String getAction() { return action; }
     public String getDetail() { return detail; }

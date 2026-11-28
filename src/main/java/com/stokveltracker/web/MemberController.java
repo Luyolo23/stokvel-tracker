@@ -28,4 +28,9 @@ public class MemberController {
                                  Principal principal) {
         return service.claim(principal.getName(), id, body.reference());
     }
+
+    @PostMapping("/contributions/{id}/withdraw")
+    public ContributionDto withdraw(@PathVariable Long id, Principal principal) {
+        return service.withdraw(principal.getName(), id);
+    }
 }

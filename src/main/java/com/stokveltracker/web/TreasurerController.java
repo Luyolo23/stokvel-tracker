@@ -2,6 +2,7 @@ package com.stokveltracker.web;
 
 import com.stokveltracker.service.ContributionService;
 import com.stokveltracker.service.Dtos.ClaimDto;
+import com.stokveltracker.service.Dtos.ConfirmedPage;
 import com.stokveltracker.service.Dtos.OverdueMemberDto;
 import com.stokveltracker.web.Requests.ReasonRequest;
 import jakarta.validation.Valid;
@@ -26,8 +27,10 @@ public class TreasurerController {
     }
 
     @GetMapping("/confirmed")
-    public List<ClaimDto> confirmed(Principal principal) {
-        return service.recentlyConfirmed(principal.getName());
+    public ConfirmedPage confirmed(@RequestParam(defaultValue = "0") int page,
+                                   @RequestParam(defaultValue = "20") int size,
+                                   Principal principal) {
+        return service.recentlyConfirmed(principal.getName(), page, size);
     }
 
     @GetMapping("/overdue")

@@ -79,7 +79,16 @@ public class Contribution {
         this.decidedAt = at;
     }
 
+    /** A member can take back a claim while the treasurer has not decided it yet. */
+    public void withdraw() {
+        resetToDue();
+    }
+
     public void reverse() {
+        resetToDue();
+    }
+
+    private void resetToDue() {
         this.status = ContributionStatus.DUE;
         this.reference = null;
         this.claimedAt = null;

@@ -3,6 +3,7 @@ package com.stokveltracker.service;
 import com.stokveltracker.domain.*;
 import com.stokveltracker.repo.AuditLogRepository;
 import com.stokveltracker.repo.ContributionRepository;
+import com.stokveltracker.repo.GroupRepository;
 import com.stokveltracker.repo.UserRepository;
 import com.stokveltracker.service.Dtos.*;
 import java.time.Instant;
@@ -10,6 +11,9 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.*;
 import java.util.stream.Collectors;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -25,33 +29,60 @@ public class ContributionService {
     private final UserRepository users;
     private final ContributionRepository contributions;
     private final AuditLogRepository auditLogs;
+    private final GroupRepository groups;
     private final AuditService audit;
 
     public ContributionService(UserRepository users, ContributionRepository contributions,
-                               AuditLogRepository auditLogs, AuditService audit) {
+                               AuditLogRepository auditLogs, GroupRepository groups, AuditService audit) {
         this.users = users;
         this.contributions = contributions;
         this.auditLogs = auditLogs;
+        this.groups = groups;
         this.audit = audit;
     }
 
     // ------------------------------------------------------------------ generation
 
-    /** Creates a DUE contribution for every active user for the given month. Safe to call repeatedly. */
+    /** Creates a DUE contribution for every active user in every group for the given month. */
     public void generateFor(YearMonth month) {
+        for (StokvelGroup group : groups.findAll()) {
+            generateFor(group, month);
+        }
+    }
+
+    /** Creates a DUE contribution for every active member of one group for the given month. */
+    public void generateFor(StokvelGroup group, YearMonth month) {
         String period = month.toString();
-        for (AppUser u : users.findByActiveTrue()) {
+        for (AppUser u : users.findByGroupAndActiveTrue(group)) {
             if (!contributions.existsByUserAndPeriod(u, period)) {
-                StokvelGroup g = u.getGroup();
                 contributions.save(new Contribution(u, period,
-                        Dates.dueDate(month, g.getDueDay()), g.getMonthlyAmountCents()));
+                        Dates.dueDate(month, group.getDueDay()), group.getMonthlyAmountCents()));
+            }
+        }
+    }
+
+    /**
+     * Fills every month between the latest month we have data for and the current month.
+     * This matters when the service is asleep or down across a month boundary: without
+     * it, the skipped month would never exist and nobody would be marked overdue for it.
+     */
+    public void generateMissingMonths() {
+        YearMonth now = YearMonth.from(Dates.today());
+        for (StokvelGroup group : groups.findAll()) {
+            String latest = contributions.findMaxPeriodByGroup(group);
+            YearMonth start = latest == null ? now : YearMonth.parse(latest);
+            if (start.isAfter(now)) {
+                start = now;
+            }
+            for (YearMonth month = start; !month.isAfter(now); month = month.plusMonths(1)) {
+                generateFor(group, month);
             }
         }
     }
 
     @Scheduled(cron = "0 5 0 * * *", zone = "Africa/Johannesburg")
     public void generateCurrentMonth() {
-        generateFor(YearMonth.from(Dates.today()));
+        generateMissingMonths();
     }
 
     // ------------------------------------------------------------------ member
@@ -68,15 +99,32 @@ public class ContributionService {
     }
 
     public ContributionDto claim(String username, Long id, String reference) {
+        AppUser user = user(username);
         Contribution c = load(id);
-        if (!c.getUser().getUsername().equals(username)) {
+        if (!c.getUser().getId().equals(user.getId())) {
             throw ApiException.forbidden("You can only claim your own payments");
         }
         if (!UNPAID.contains(c.getStatus())) {
             throw ApiException.badRequest("This month is already " + c.getStatus().name().toLowerCase());
         }
         c.claim(reference.trim(), Instant.now());
-        audit.record(username, "CLAIM", c.getPeriod() + " claimed as paid, ref: " + reference.trim());
+        audit.record(user.getGroup(), username, "CLAIM",
+                c.getPeriod() + " claimed as paid, ref: " + reference.trim());
+        return toDto(c, Dates.today());
+    }
+
+    /** Lets a member take back a claim while the treasurer has not decided it yet. */
+    public ContributionDto withdraw(String username, Long id) {
+        AppUser user = user(username);
+        Contribution c = load(id);
+        if (!c.getUser().getId().equals(user.getId())) {
+            throw ApiException.forbidden("You can only withdraw your own claims");
+        }
+        if (c.getStatus() != ContributionStatus.PENDING) {
+            throw ApiException.badRequest("Only a claim awaiting confirmation can be withdrawn");
+        }
+        c.withdraw();
+        audit.record(user.getGroup(), username, "WITHDRAW", c.getPeriod() + " claim withdrawn");
         return toDto(c, Dates.today());
     }
 
@@ -91,26 +139,24 @@ public class ContributionService {
     }
 
     @Transactional(readOnly = true)
-    public List<ClaimDto> recentlyConfirmed(String treasurerUsername) {
+    public ConfirmedPage recentlyConfirmed(String treasurerUsername, int page, int size) {
         StokvelGroup group = user(treasurerUsername).getGroup();
-        return contributions.findByGroupAndStatus(group, ContributionStatus.CONFIRMED).stream()
-                .filter(c -> c.getDecidedAt() != null)
-                .sorted(Comparator.comparing(Contribution::getDecidedAt).reversed())
-                .limit(20)
-                .map(this::toClaim).toList();
+        Page<Contribution> result = contributions.findPageByGroupAndStatus(group,
+                ContributionStatus.CONFIRMED, pageRequest(page, size));
+        return toConfirmedPage(result);
     }
 
     public void confirm(String treasurerUsername, Long id) {
         Contribution c = decidable(treasurerUsername, id, ContributionStatus.PENDING);
         c.confirm(treasurerUsername, Instant.now());
-        audit.record(treasurerUsername, "CONFIRM",
+        audit.record(c.getUser().getGroup(), treasurerUsername, "CONFIRM",
                 c.getUser().getDisplayName() + " " + c.getPeriod() + " confirmed, ref: " + c.getReference());
     }
 
     public void reject(String treasurerUsername, Long id, String reason) {
         Contribution c = decidable(treasurerUsername, id, ContributionStatus.PENDING);
         c.reject(treasurerUsername, reason.trim(), Instant.now());
-        audit.record(treasurerUsername, "REJECT",
+        audit.record(c.getUser().getGroup(), treasurerUsername, "REJECT",
                 c.getUser().getDisplayName() + " " + c.getPeriod() + " rejected: " + reason.trim());
     }
 
@@ -119,7 +165,7 @@ public class ContributionService {
         Contribution c = decidable(treasurerUsername, id, ContributionStatus.CONFIRMED);
         String oldRef = c.getReference();
         c.reverse();
-        audit.record(treasurerUsername, "REVERSE",
+        audit.record(c.getUser().getGroup(), treasurerUsername, "REVERSE",
                 c.getUser().getDisplayName() + " " + c.getPeriod() + " reversed (old ref: "
                         + oldRef + "): " + reason.trim());
     }
@@ -142,6 +188,50 @@ public class ContributionService {
     }
 
     // ------------------------------------------------------------------ chair
+
+    /**
+     * The chair countersigns the treasurer's own payments. The treasurer may not decide
+     * them, so without this path they would stay PENDING forever.
+     */
+    @Transactional(readOnly = true)
+    public List<ClaimDto> chairPending(String chairUsername) {
+        StokvelGroup group = user(chairUsername).getGroup();
+        return contributions.findByGroupRoleAndStatus(group, Role.TREASURER, ContributionStatus.PENDING)
+                .stream()
+                .sorted(Comparator.comparing(Contribution::getClaimedAt))
+                .map(this::toClaim).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public ConfirmedPage chairRecentlyConfirmed(String chairUsername, int page, int size) {
+        StokvelGroup group = user(chairUsername).getGroup();
+        Page<Contribution> result = contributions.findPageByGroupRoleAndStatus(group, Role.TREASURER,
+                ContributionStatus.CONFIRMED, pageRequest(page, size));
+        return toConfirmedPage(result);
+    }
+
+    public void chairConfirm(String chairUsername, Long id) {
+        Contribution c = decidableByChair(chairUsername, id, ContributionStatus.PENDING);
+        c.confirm(chairUsername, Instant.now());
+        audit.record(c.getUser().getGroup(), chairUsername, "CONFIRM",
+                c.getUser().getDisplayName() + " " + c.getPeriod() + " confirmed, ref: " + c.getReference());
+    }
+
+    public void chairReject(String chairUsername, Long id, String reason) {
+        Contribution c = decidableByChair(chairUsername, id, ContributionStatus.PENDING);
+        c.reject(chairUsername, reason.trim(), Instant.now());
+        audit.record(c.getUser().getGroup(), chairUsername, "REJECT",
+                c.getUser().getDisplayName() + " " + c.getPeriod() + " rejected: " + reason.trim());
+    }
+
+    public void chairReverse(String chairUsername, Long id, String reason) {
+        Contribution c = decidableByChair(chairUsername, id, ContributionStatus.CONFIRMED);
+        String oldRef = c.getReference();
+        c.reverse();
+        audit.record(c.getUser().getGroup(), chairUsername, "REVERSE",
+                c.getUser().getDisplayName() + " " + c.getPeriod() + " reversed (old ref: "
+                        + oldRef + "): " + reason.trim());
+    }
 
     @Transactional(readOnly = true)
     public ChairSummary summary(String chairUsername) {
@@ -169,7 +259,7 @@ public class ContributionService {
             long memberOwed = sum(items, ContributionStatus.DUE) + sum(items, ContributionStatus.REJECTED);
             int overdueCount = (int) items.stream().filter(c -> isOverdue(c, today)).count();
             if (overdueCount > 0) behind++;
-            rows.add(new MemberRow(u.getDisplayName(), confirmed, memberOwed, overdueCount));
+            rows.add(new MemberRow(u.getId(), u.getDisplayName(), confirmed, memberOwed, overdueCount));
         }
         rows.sort(Comparator.comparingInt(MemberRow::overdueCount).reversed()
                 .thenComparing(MemberRow::memberName));
@@ -177,8 +267,9 @@ public class ContributionService {
     }
 
     @Transactional(readOnly = true)
-    public List<AuditDto> auditTrail() {
-        return auditLogs.findTop50ByOrderByCreatedAtDesc().stream()
+    public List<AuditDto> auditTrail(String chairUsername) {
+        StokvelGroup group = user(chairUsername).getGroup();
+        return auditLogs.findTop50ByGroupOrderByCreatedAtDesc(group).stream()
                 .map(a -> new AuditDto(a.getId(), a.getActor(), a.getAction(), a.getDetail(), a.getCreatedAt()))
                 .toList();
     }
@@ -187,7 +278,8 @@ public class ContributionService {
 
     private AppUser user(String username) {
         return users.findByUsername(username)
-                .orElseThrow(() -> ApiException.notFound("Unknown user"));
+                .filter(AppUser::isActive)
+                .orElseThrow(() -> ApiException.unauthorized("Your account is no longer active"));
     }
 
     private Contribution load(Long id) {
@@ -210,6 +302,36 @@ public class ContributionService {
             throw ApiException.badRequest("Expected status " + expected + " but it is " + c.getStatus());
         }
         return c;
+    }
+
+    /** The chair may only countersign the treasurer's own payments. */
+    private Contribution decidableByChair(String chairUsername, Long id, ContributionStatus expected) {
+        AppUser chair = user(chairUsername);
+        Contribution c = load(id);
+        if (!c.getUser().getGroup().getId().equals(chair.getGroup().getId())) {
+            throw ApiException.forbidden("That payment belongs to another group");
+        }
+        if (c.getUser().getRole() != Role.TREASURER) {
+            throw ApiException.forbidden("The chair can only countersign the treasurer's own payments");
+        }
+        if (c.getStatus() != expected) {
+            throw ApiException.badRequest("Expected status " + expected + " but it is " + c.getStatus());
+        }
+        return c;
+    }
+
+    private static PageRequest pageRequest(int page, int size) {
+        int safePage = Math.max(0, page);
+        int safeSize = Math.min(Math.max(1, size), 100);
+        return PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "decidedAt"));
+    }
+
+    private ConfirmedPage toConfirmedPage(Page<Contribution> result) {
+        List<ClaimDto> items = result.getContent().stream()
+                .filter(c -> c.getDecidedAt() != null)
+                .map(this::toClaim)
+                .toList();
+        return new ConfirmedPage(items, result.hasNext());
     }
 
     private static long sum(List<Contribution> list, ContributionStatus status) {

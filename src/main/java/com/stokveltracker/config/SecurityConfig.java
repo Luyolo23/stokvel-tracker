@@ -30,7 +30,10 @@ public class SecurityConfig {
                 .requestMatchers("/api/treasurer/**").hasRole("TREASURER")
                 .requestMatchers("/api/chair/**").hasRole("CHAIR")
                 .requestMatchers("/api/**").authenticated()
-                .anyRequest().permitAll())
+                // Only the built SPA and Spring's own error/login endpoints are public.
+                .requestMatchers("/", "/index.html", "/assets/**", "/favicon.ico",
+                                 "/login", "/error").permitAll()
+                .anyRequest().denyAll())
             .formLogin(form -> form
                 .loginProcessingUrl("/api/auth/login")
                 .successHandler((req, res, auth) -> res.setStatus(HttpServletResponse.SC_OK))

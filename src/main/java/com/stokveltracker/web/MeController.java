@@ -20,6 +20,7 @@ public class MeController {
     @GetMapping("/api/me")
     public MeDto me(Principal principal) {
         AppUser u = users.findByUsername(principal.getName())
+                .filter(AppUser::isActive)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED));
         return new MeDto(u.getUsername(), u.getDisplayName(), u.getRole().name(),
                 u.getGroup().getName(), u.getGroup().getMonthlyAmountCents());

@@ -18,14 +18,18 @@ public final class Dtos {
     public record MemberOverview(List<ContributionDto> contributions, long paidCents,
                                  long pendingCents, long owedCents) {}
 
-    /** Used for both the "to confirm" list and the "recently confirmed" list. */
+    /** Used for both the "to confirm" list and the "confirmed" list. */
     public record ClaimDto(Long id, String memberName, String month, long amountDueCents,
                            String reference, Instant claimedAt, String decidedBy, Instant decidedAt) {}
+
+    /** One page of confirmed payments, so older mistakes can still be found and reversed. */
+    public record ConfirmedPage(List<ClaimDto> items, boolean hasMore) {}
 
     public record OverdueMemberDto(Long userId, String memberName, String phone,
                                    List<String> months, long totalCents) {}
 
-    public record MemberRow(String memberName, long confirmedCents, long owedCents, int overdueCount) {}
+    public record MemberRow(Long userId, String memberName, long confirmedCents, long owedCents,
+                            int overdueCount) {}
 
     public record ChairSummary(String month, long expectedThisMonthCents, long collectedThisMonthCents,
                                long owedTotalCents, long pendingCount, int membersBehind,
